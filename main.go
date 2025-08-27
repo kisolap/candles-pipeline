@@ -52,9 +52,17 @@ func parseMinuteCandles(tickerPrices map[string][]domain.Price) []domain.Candle 
 	return minuteCandles
 }
 
+func addTicker(tickerPrices map[string][]domain.Price, price domain.Price) {
+	tickerPrices[price.Ticker] = append(tickerPrices[price.Ticker], domain.Price{
+		Ticker: price.Ticker,
+		Value:  price.Value,
+		TS:     price.TS,
+	})
+}
+
 func fromPricesToMinuteCandles(prices <-chan domain.Price, wg *sync.WaitGroup) <-chan domain.Candle {
 	tickerPrices := map[string][]domain.Price{}
-	minuteCandles := make(chan domain.Candle)
+	minuteCandlesChan := make(chan domain.Candle, 4)
 
 	wg.Add(1)
 
@@ -65,6 +73,12 @@ func fromPricesToMinuteCandles(prices <-chan domain.Price, wg *sync.WaitGroup) <
 			return
 		}
 
+		tickerPrices[start.Ticker] = append(tickerPrices[start.Ticker], domain.Price{
+			Ticker: start.Ticker,
+			Value:  start.Value,
+			TS:     start.TS,
+		})
+
 		timeStart, _ := domain.PeriodTS("1m", start.TS)
 		timeEnd := timeStart.Add(time.Minute)
 
@@ -72,33 +86,61 @@ func fromPricesToMinuteCandles(prices <-chan domain.Price, wg *sync.WaitGroup) <
 			// Если текущий 1-минутный период идет
 			if price.TS.Before(timeEnd) {
 				tickerPrices[price.Ticker] = append(tickerPrices[price.Ticker], domain.Price{
-					Value: price.Value,
-					TS:    price.TS,
+					Ticker: price.Ticker,
+					Value:  price.Value,
+					TS:     price.TS,
 				})
-				// Текущий период окончен: обработка накопленных preCandles,
-				// создание нового минутного периода
+				// Текущий период окончен: сбор оставшихся трёх тиккеров,
+				// обработка накопленных preCandles, создание нового минутного периода
 			} else {
-				fmt.Println(parseMinuteCandles(tickerPrices))
+				for i := 0; i < 3; i++ {
+					tickerPrices[price.Ticker] = append(tickerPrices[price.Ticker], domain.Price{
+						Ticker: price.Ticker,
+						Value:  price.Value,
+						TS:     price.TS,
+					})
+				}
+				minuteCandles := parseMinuteCandles(tickerPrices)
+				for _, candle := range minuteCandles {
+					minuteCandlesChan <- candle
+				}
 
+				// Сброс мапы
 				tickerPrices = map[string][]domain.Price{}
 
 				newPeriodStart, _ := domain.PeriodTS("1m", price.TS)
 				timeEnd = newPeriodStart.Add(time.Minute - time.Second)
 
 				tickerPrices[price.Ticker] = append(tickerPrices[price.Ticker], domain.Price{
-					Value: price.Value,
-					TS:    price.TS,
+					Ticker: price.Ticker,
+					Value:  price.Value,
+					TS:     price.TS,
 				})
 			}
 		}
 	}()
 
-	return minuteCandles
+	return minuteCandlesChan
 }
+
+//func fromMinuteTo2MinuteCandles(minuteCandlesChan <-chan domain.Candle, wg *sync.WaitGroup) <-chan domain.Candle {
+//	twoMinuteCandlesChan := make(chan domain.Candle)
+//	tickerCandles := map[string]domain.Candle{}
+//
+//	go func() {
+//		for candle := range minuteCandlesChan {
+//
+//		}
+//	}()
+//
+//
+//	return twoMinuteCandlesChan
+//}
 
 func main() {
 	logger := log.New()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	pg := generator.NewPricesGenerator(generator.Config{
 		Factor:  10,
@@ -109,14 +151,27 @@ func main() {
 	logger.Info("start prices generator...")
 	prices := pg.Prices(ctx)
 
-	for i := 0; i <= 10; i++ {
-		logger.Infof("prices %d: %+v", i, <-prices)
-	}
+	//for i := 0; i <= 20; i++ {
+	//	logger.Infof("prices %d: %+v", i, <-prices)
+	//}
 
 	wg := sync.WaitGroup{}
 
-	fromPricesToMinuteCandles(prices, &wg)
+	minuteCandlesChan := fromPricesToMinuteCandles(prices, &wg)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		counter := 0
+		for candle := range minuteCandlesChan {
+			if counter%4 == 0 {
+				fmt.Println()
+			}
+			fmt.Println(candle)
+			counter++
+		}
+		//close(minuteCandlesChan)
+	}()
 
 	wg.Wait()
-	cancel()
 }
