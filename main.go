@@ -41,10 +41,7 @@ func main() {
 	prices := pg.Prices(ctx)
 
 	wg := sync.WaitGroup{}
-
-	minuteCandlesChan := domain.FromPricesToMinuteCandles(prices, &wg, &writer)
-	twoMinuteCandlesChan := domain.CreateCandles(minuteCandlesChan, &wg, &writer, domain.CandlePeriod2m)
-	domain.CreateCandles(twoMinuteCandlesChan, &wg, &writer, domain.CandlePeriod10m)
+	domain.ProcessPrices(prices, &wg, &writer)
 
 	wg.Wait()
 }
