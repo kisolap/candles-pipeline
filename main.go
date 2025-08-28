@@ -43,8 +43,8 @@ func main() {
 	wg := sync.WaitGroup{}
 
 	minuteCandlesChan := domain.FromPricesToMinuteCandles(prices, &wg, &writer)
-	twoMinuteCandlesChan := domain.FromMinuteTo2MinuteCandles(minuteCandlesChan, &wg, &writer)
-	domain.From2MinuteTo10MinuteCandles(twoMinuteCandlesChan, &wg, &writer)
+	twoMinuteCandlesChan := domain.CreateCandles(minuteCandlesChan, &wg, &writer, domain.CandlePeriod2m)
+	domain.CreateCandles(twoMinuteCandlesChan, &wg, &writer, domain.CandlePeriod10m)
 
 	wg.Wait()
 }

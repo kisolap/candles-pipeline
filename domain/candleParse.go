@@ -165,80 +165,57 @@ func FromPricesToMinuteCandles(prices <-chan Price, wg *sync.WaitGroup, writer *
 	return minuteCandlesChan
 }
 
-func FromMinuteTo2MinuteCandles(minuteCandlesChan <-chan Candle, wg *sync.WaitGroup, writer *CandleWriter) chan Candle {
-	twoMinuteCandlesChan := make(chan Candle)
+func CreateCandles(inCandlesChan <-chan Candle, wg *sync.WaitGroup, writer *CandleWriter, period CandlePeriod) chan Candle {
+	outCandlesChan := make(chan Candle)
 	tickerCandles := map[string][]Candle{}
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		start, ok := <-minuteCandlesChan
+		start, ok := <-inCandlesChan
 		if !ok {
 			return
 		}
 
-		timeStart, _ := PeriodTS("2m", start.TS)
-		timeEnd := timeStart.Add(time.Minute * 2)
+		timeStart, _ := PeriodTS(period, start.TS)
+
+		var minuteCount int64
+		switch period {
+		case CandlePeriod1m:
+			minuteCount = 1
+		case CandlePeriod2m:
+			minuteCount = 2
+		case CandlePeriod10m:
+			minuteCount = 10
+		}
+
+		timeEnd := timeStart.Add(time.Minute * time.Duration(minuteCount))
 		tickerCandles[start.Ticker] = append(tickerCandles[start.Ticker], start)
 
-		for candle := range minuteCandlesChan {
+		for candle := range inCandlesChan {
 			if candle.TS.Before(timeEnd) {
 				tickerCandles[candle.Ticker] = append(tickerCandles[candle.Ticker], candle)
 			} else {
-				twoMinuteCandles := parseCandles(CandlePeriod2m, tickerCandles)
-				for _, twoMinuteCandle := range twoMinuteCandles {
-					writer.saveCandle(CandlePeriod2m, twoMinuteCandle)
-					twoMinuteCandlesChan <- twoMinuteCandle
+				candles := parseCandles(period, tickerCandles)
+				for _, newCandle := range candles {
+					if period == CandlePeriod2m {
+						outCandlesChan <- newCandle
+					}
+					writer.saveCandle(period, newCandle)
 				}
 
 				tickerCandles = map[string][]Candle{}
 
-				newPeriodStart, _ := PeriodTS("2m", candle.TS)
-				timeEnd = newPeriodStart.Add(time.Minute * 2)
+				newPeriodStart, _ := PeriodTS(period, candle.TS)
+				timeEnd = newPeriodStart.Add(time.Minute * time.Duration(minuteCount))
 
 				tickerCandles[candle.Ticker] = append(tickerCandles[candle.Ticker], candle)
 			}
 		}
 
-		close(twoMinuteCandlesChan)
+		close(outCandlesChan)
 	}()
 
-	return twoMinuteCandlesChan
-}
-
-func From2MinuteTo10MinuteCandles(twoMinuteCandlesChan <-chan Candle, wg *sync.WaitGroup, writer *CandleWriter) {
-	tickerCandles := map[string][]Candle{}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		start, ok := <-twoMinuteCandlesChan
-		if !ok {
-			return
-		}
-
-		timeStart, _ := PeriodTS("10m", start.TS)
-		timeEnd := timeStart.Add(time.Minute * 10)
-		tickerCandles[start.Ticker] = append(tickerCandles[start.Ticker], start)
-
-		for candle := range twoMinuteCandlesChan {
-			if candle.TS.Before(timeEnd) {
-				tickerCandles[candle.Ticker] = append(tickerCandles[candle.Ticker], candle)
-			} else {
-				tenMinuteCandles := parseCandles(CandlePeriod10m, tickerCandles)
-				for _, tenMinuteCandle := range tenMinuteCandles {
-					writer.saveCandle(CandlePeriod10m, tenMinuteCandle)
-				}
-
-				tickerCandles = map[string][]Candle{}
-
-				newPeriodStart, _ := PeriodTS("10m", candle.TS)
-				timeEnd = newPeriodStart.Add(time.Minute * 10)
-
-				tickerCandles[candle.Ticker] = append(tickerCandles[candle.Ticker], candle)
-			}
-		}
-	}()
+	return outCandlesChan
 }
