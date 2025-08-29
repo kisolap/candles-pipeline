@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -69,47 +70,53 @@ func parseCandles(candlePeriod CandlePeriod, tickerCandles map[string][]Candle) 
 
 		parsedCandles = append(parsedCandles, candle)
 	}
-
 	return parsedCandles
 }
 
-func ProcessPrices(prices <-chan Price, wg *sync.WaitGroup, writer *CandleWriter) {
+func ProcessPrices(ctx context.Context, prices <-chan Price, wg *sync.WaitGroup, writer *CandleWriter) {
 	wg.Add(1)
 	outCandles := make(chan Candle)
 	go func() {
 		defer wg.Done()
 		defer close(outCandles)
-		for price := range prices {
-			candle := Candle{
-				Ticker: price.Ticker,
-				Period: CandlePeriod1m,
-				Open:   price.Value,
-				High:   price.Value,
-				Low:    price.Value,
-				Close:  price.Value,
-				TS:     price.TS,
+
+		for {
+			select {
+			case price, ok := <-prices:
+				if !ok {
+					return
+				}
+				candle := Candle{
+					Ticker: price.Ticker,
+					Period: CandlePeriod1m,
+					Open:   price.Value,
+					High:   price.Value,
+					Low:    price.Value,
+					Close:  price.Value,
+					TS:     price.TS,
+				}
+				outCandles <- candle
+			case <-ctx.Done():
+				return
 			}
-			outCandles <- candle
 		}
 	}()
 
-	minuteCandlesChan := CreateCandles(outCandles, wg, writer, CandlePeriod1m)
-	twoMinuteCandlesChan := CreateCandles(minuteCandlesChan, wg, writer, CandlePeriod2m)
-	CreateCandles(twoMinuteCandlesChan, wg, writer, CandlePeriod10m)
+	minuteCandlesChan := CreateCandles(ctx, outCandles, wg, writer, CandlePeriod1m)
+	twoMinuteCandlesChan := CreateCandles(ctx, minuteCandlesChan, wg, writer, CandlePeriod2m)
+	CreateCandles(ctx, twoMinuteCandlesChan, wg, writer, CandlePeriod10m)
 }
 
-func CreateCandles(inCandlesChan <-chan Candle, wg *sync.WaitGroup, writer *CandleWriter, period CandlePeriod) chan Candle {
+func CreateCandles(ctx context.Context, inCandlesChan <-chan Candle, wg *sync.WaitGroup, writer *CandleWriter, period CandlePeriod) chan Candle {
 	outCandlesChan := make(chan Candle)
 	tickerCandles := map[string][]Candle{}
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer close(outCandlesChan)
 
-		start, ok := <-inCandlesChan
-		if !ok {
-			return
-		}
+		start, _ := <-inCandlesChan
 
 		timeStart, _ := PeriodTS(period, start.TS)
 
@@ -126,10 +133,38 @@ func CreateCandles(inCandlesChan <-chan Candle, wg *sync.WaitGroup, writer *Cand
 		timeEnd := timeStart.Add(time.Minute * time.Duration(minuteCount))
 		tickerCandles[start.Ticker] = append(tickerCandles[start.Ticker], start)
 
-		for candle := range inCandlesChan {
-			if candle.TS.Before(timeEnd) {
-				tickerCandles[candle.Ticker] = append(tickerCandles[candle.Ticker], candle)
-			} else {
+		for {
+			select {
+			case candle, ok := <-inCandlesChan:
+				if !ok {
+					candles := parseCandles(period, tickerCandles)
+					for _, newCandle := range candles {
+						if period == CandlePeriod1m || period == CandlePeriod2m {
+							outCandlesChan <- newCandle
+						}
+						writer.saveCandle(period, newCandle)
+					}
+					return
+				}
+				if candle.TS.Before(timeEnd) {
+					tickerCandles[candle.Ticker] = append(tickerCandles[candle.Ticker], candle)
+				} else {
+					candles := parseCandles(period, tickerCandles)
+					for _, newCandle := range candles {
+						if period == CandlePeriod1m || period == CandlePeriod2m {
+							outCandlesChan <- newCandle
+						}
+						writer.saveCandle(period, newCandle)
+					}
+
+					tickerCandles = map[string][]Candle{}
+
+					newPeriodStart, _ := PeriodTS(period, candle.TS)
+					timeEnd = newPeriodStart.Add(time.Minute * time.Duration(minuteCount))
+
+					tickerCandles[candle.Ticker] = append(tickerCandles[candle.Ticker], candle)
+				}
+			case <-ctx.Done():
 				candles := parseCandles(period, tickerCandles)
 				for _, newCandle := range candles {
 					if period == CandlePeriod1m || period == CandlePeriod2m {
@@ -137,17 +172,9 @@ func CreateCandles(inCandlesChan <-chan Candle, wg *sync.WaitGroup, writer *Cand
 					}
 					writer.saveCandle(period, newCandle)
 				}
-
-				tickerCandles = map[string][]Candle{}
-
-				newPeriodStart, _ := PeriodTS(period, candle.TS)
-				timeEnd = newPeriodStart.Add(time.Minute * time.Duration(minuteCount))
-
-				tickerCandles[candle.Ticker] = append(tickerCandles[candle.Ticker], candle)
+				return
 			}
 		}
-
-		close(outCandlesChan)
 	}()
 
 	return outCandlesChan

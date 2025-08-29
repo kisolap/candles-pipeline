@@ -5,6 +5,7 @@ import (
 	"hw1/hw3/domain"
 	"hw1/hw3/generator"
 	"os"
+	"os/signal"
 	"sync"
 	"time"
 
@@ -16,7 +17,6 @@ var tickers = []string{"AAPL", "SBER", "NVDA", "TSLA"}
 func main() {
 	logger := log.New()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	file1, _ := os.Create("candles_1m.csv")
 	file2, _ := os.Create("candles_2m.csv")
@@ -37,11 +37,31 @@ func main() {
 		Tickers: tickers,
 	})
 
-	logger.Info("start prices generator...")
+	logger.Info("Start prices generator...")
 	prices := pg.Prices(ctx)
 
 	wg := sync.WaitGroup{}
-	domain.ProcessPrices(prices, &wg, &writer)
+	domain.ProcessPrices(ctx, prices, &wg, &writer)
 
-	wg.Wait()
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+
+	sig := <-sigChan
+	logger.Infof("Received %v, start graceful shutdown...", sig)
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logger.Info("All goroutines finished successfully.")
+	case <-time.After(10 * time.Second):
+		logger.Info("Graceful shutdown timeout, some goroutines may not have finished.")
+	}
+
+	logger.Info("Program shutdown complete.")
 }
