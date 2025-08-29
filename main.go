@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"hw1/hw3/domain"
-	"hw1/hw3/generator"
+	"hw1/domain"
+	"hw1/generator"
 	"os"
 	"os/signal"
 	"sync"
@@ -25,11 +25,7 @@ func main() {
 	defer file2.Close()
 	defer file3.Close()
 
-	writer := domain.CandleWriter{
-		File1: file1,
-		File2: file2,
-		File3: file3,
-	}
+	writer := domain.NewCandleWriter(file1, file2, file3)
 
 	pg := generator.NewPricesGenerator(generator.Config{
 		Factor:  10,
@@ -38,10 +34,11 @@ func main() {
 	})
 
 	logger.Info("Start prices generator...")
+
 	prices := pg.Prices(ctx)
 
 	wg := sync.WaitGroup{}
-	domain.ProcessPrices(ctx, prices, &wg, &writer)
+	domain.ProcessPrices(prices, &wg, writer)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
