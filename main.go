@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"hw1/domain"
-	"hw1/generator"
+	"hw3/domain"
+	"hw3/generator"
 	"os"
 	"os/signal"
 	"sync"

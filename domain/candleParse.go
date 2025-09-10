@@ -134,7 +134,6 @@ func CreateCandles(inCandlesChan <-chan Candle, wg *sync.WaitGroup, writer *Cand
 		case CandlePeriod10m:
 			minuteCount = 10
 		}
-
 		timeEnd := timeStart.Add(time.Minute * time.Duration(minuteCount))
 		tickerCandles[start.Ticker] = append(tickerCandles[start.Ticker], start)
 

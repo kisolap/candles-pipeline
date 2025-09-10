@@ -2,7 +2,7 @@ package generator
 
 import (
 	"context"
-	"hw1/hw3/domain"
+	"hw3/domain"
 	"math/rand"
 	"time"
 )
